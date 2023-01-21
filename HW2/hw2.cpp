@@ -1,17 +1,18 @@
 #include <iostream>
 #include <vector>
+#include <future>
 
 using namespace std;
 
 typedef vector<int> Data;
 
-int N_THREADS = 16
+int MAX_FORK_LEVELS = 4;
 
 class Heaper {
 public:
     Heaper(const Data *data) : n(data->size()), data(data) {
 
-    interior = new Data(n - 1, 0);
+        interior = new Data(n - 1, 0);
     }
     virtual ~Heaper() {
         delete interior;
@@ -53,37 +54,54 @@ public:
 class SumHeap: public Heaper {
 public:
     SumHeap(const Data *data) : Heaper(data) {
-        calcSum(0);
+        calcSum(0, 0);
     }
     int sum(int node=0) {
         return value(node);
     }
 public:
     void prefixSums(Data *prefixes) {
-        calcPrefix(0, 0, prefixes);
+        calcPrefix(0, 0, 0,prefixes);
     }
 private:
-    void calcSum(int i) {
+    void calcSum(int i, int level) {
         if (isLeaf(i))
             return;
-        calcSum(left(i));
-        calcSum(right(i));
+
+        if(level<MAX_FORK_LEVELS) {
+            auto future = async(launch::async, &SumHeap::calcSum, this, left(i), level+1);
+            calcSum(right(i), level+1);
+            future.wait();
+        }
+        else {
+            calcSum(left(i), level+1);
+            calcSum(right(i), level+1);
+        }
+
+
 
         interior->at(i) = value(left(i)) + value(right(i));
     }
 private:
-    void calcPrefix(int i, int sumPrior, Data *prefixes) {
+    void calcPrefix(int i, int sumPrior, int level, Data *prefixes) {
         if(isLeaf(i)) {
             prefixes->at(i - (n -1)) = sumPrior + value(i); // why i+1-n
+        } else if (level<MAX_FORK_LEVELS){
+            // fork a thread for the left child
+            auto leftFuture = async(launch::async,&SumHeap::calcPrefix, this, left(i), sumPrior, level+1, prefixes);
+            // call right child from main thread recursively
+            calcPrefix(right(i), sumPrior + value(left(i)),level+1, prefixes);
+            // wait for  threads to complete
+            leftFuture.wait();
         } else {
-            calcPrefix(left(i), sumPrior, prefixes);
-            calcPrefix(right(i), sumPrior + value(left(i)), prefixes);
+            calcPrefix(left(i), sumPrior,level+1, prefixes);
+            calcPrefix(right(i), sumPrior + value(left(i)),level+1, prefixes);
         }
 
     }
 };
 
-const int N = 1<<4;  // FIXME must be power of 2 for now
+const int N = 1<<26;  // FIXME must be power of 2 for now
 
 //const int N = 4;
 
@@ -98,23 +116,6 @@ int main() {
     SumHeap heap(&data);
 
     heap.prefixSums(&prefix);
-    cout << "Data vector values:" << endl;
-    for (auto elem : *heap.data) {
-        cout << elem << " ";
-    }
-    cout << endl;
-
-    cout << "Interior vector values:" << endl;
-    for (auto elem : *heap.interior) {
-        cout << elem << " ";
-    }
-    cout << endl;
-
-    cout << "Prefix vector values:" << endl;
-    for (auto elem : prefix) {
-        cout << elem << " ";
-    }
-    cout << endl;
 
     // stop timer
     auto end = chrono::steady_clock::now();
@@ -129,6 +130,3 @@ int main() {
     cout << "in " << elpased << "ms" << endl;
     return 0;
 }
-//            13
-//    11             2
-//10      1       1       1
