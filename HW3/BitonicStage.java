@@ -56,7 +56,7 @@ public class BitonicStage implements Runnable {
             }
         }
     }
-    
+
     /**
      * process the input by merging and sorting it using BitonicSort
      * @param firstHalf the first half of the input

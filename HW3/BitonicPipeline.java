@@ -16,7 +16,7 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 
 public class BitonicPipeline {
-    private List<SynchronousQueue<double[]>> dataQueues;
+    private SynchronousQueue<double[]>[] dataQueues;
     private Thread[] workerThreads;
     private static final int N = 1 << 22;  // size of the final sorted array (power of two)
     private static final int TIME_ALLOWED = 10;  // seconds
@@ -26,7 +26,7 @@ public class BitonicPipeline {
     private static final int TOTAL_THREADS = ARRAY_GENERATOR_THREADS + STAGE_ONE_THREADS + BITONIC_STAGE_THREADS + 1; // add 1 for last stage
 
     public BitonicPipeline() {
-        dataQueues = new ArrayList<>();
+        dataQueues = new SynchronousQueue[TOTAL_THREADS];
         workerThreads = new Thread[TOTAL_THREADS];
     }
 
@@ -49,18 +49,18 @@ public class BitonicPipeline {
         // Create SynchronousQueue objects and worker threads for each pipeline stage
 
         for (int i = 0; i < TOTAL_THREADS; i++) {
-            dataQueues.add(new SynchronousQueue<>());
+            dataQueues[i] = new SynchronousQueue<>();
         }
 
         // Initialize RandomArrayGenerator Threads to generate random array sections
         for (int i = 0; i < ARRAY_GENERATOR_THREADS; i++) {
-            workerThreads[i] = new Thread(new RandomArrayGenerator(N / 4, dataQueues.get(i)));
+            workerThreads[i] = new Thread(new RandomArrayGenerator(N / 4, dataQueues[i]));
         }
 
         // Initialize StageOne Threads to sort the generated arrays
         for (int i = 0; i < STAGE_ONE_THREADS; i++) {
             int index = i + ARRAY_GENERATOR_THREADS;
-            workerThreads[index] = new Thread(new StageOne(dataQueues.get(i), dataQueues.get(index),
+            workerThreads[index] = new Thread(new StageOne(dataQueues[i], dataQueues[index],
                     "THREAD [" + index + "]"));
         }
 
@@ -68,15 +68,15 @@ public class BitonicPipeline {
         for (int i = 0; i < BITONIC_STAGE_THREADS; i++) {
             int stageOneIndex = (i * 2) + ARRAY_GENERATOR_THREADS;
             int index = i + ARRAY_GENERATOR_THREADS + STAGE_ONE_THREADS;
-            workerThreads[index] = new Thread(new BitonicStage(dataQueues.get(stageOneIndex),
-                    dataQueues.get(stageOneIndex + 1), dataQueues.get(index),
+            workerThreads[index] = new Thread(new BitonicStage(dataQueues[stageOneIndex],
+                    dataQueues[stageOneIndex + 1], dataQueues[index],
                     "THREAD[" + index + "]"));
         }
 
         // Initialize last BitonicStage Thread to sort the final sequence
         int finalStageIndex = TOTAL_THREADS - 1;
-        workerThreads[finalStageIndex] = new Thread(new BitonicStage(dataQueues.get(finalStageIndex - 2),
-                dataQueues.get(finalStageIndex - 1), dataQueues.get(finalStageIndex),
+        workerThreads[finalStageIndex] = new Thread(new BitonicStage(dataQueues[finalStageIndex - 2],
+                dataQueues[finalStageIndex - 1], dataQueues[finalStageIndex],
                 "THREAD[" + finalStageIndex + "]"));
     }
 
@@ -93,19 +93,19 @@ public class BitonicPipeline {
         }
 
         int numberOfSortedArrays = 0;
-        boolean successful = true;
+        boolean isSuccessful = true;
         while (System.currentTimeMillis() < start + TIME_ALLOWED * 1000) {
-            double[] res = dataQueues.get(10).poll(10 * 1000, TimeUnit.MILLISECONDS);
+            double[] res = dataQueues[TOTAL_THREADS-1].poll(10 * 1000, TimeUnit.MILLISECONDS);
             if (res != null) {
                 if (!RandomArrayGenerator.isSorted(res) || N != res.length) {
                     System.out.println("Sorting was not successfull");
-                    successful = false;
+                    isSuccessful = false;
                     break;
                 }
                 numberOfSortedArrays++;
             }
         }
-        if (successful)
+        if (isSuccessful)
             System.out.println("sorted " + numberOfSortedArrays + " arrays (each: " + N + " doubles) in "
                     + TIME_ALLOWED + " seconds");
     }
