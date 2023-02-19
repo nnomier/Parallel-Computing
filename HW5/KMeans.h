@@ -136,11 +136,6 @@ protected:
     virtual void accum(Element& centroid, int centroid_n, const Element& addend, int addend_n) const {
         int new_n = centroid_n + addend_n;
         for (int i = 0; i < d; i++) {
-            centroid[r] * elelements kolaha + element elgdid[r] * added
-            // ana 3yza azawed value el r wel g wel b bt3t elelement elgdid 3la eltotal bt3 elcentroid
-            // falaw elcentroid bta3y {3,4,5}
-            // wana gali element gdid {7,8,9}
-
             double new_total = (double) centroid[i] * centroid_n + (double) addend[i] * addend_n;
             centroid[i] = (u_char)(new_total / new_n);
         }

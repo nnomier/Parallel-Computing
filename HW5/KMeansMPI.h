@@ -7,6 +7,8 @@
 #include <array>
 #include <mpi.h>
 
+using namespace std;
+
 template <int k, int d>
 class KMeansMPI {
 public:
@@ -35,6 +37,17 @@ public:
         elements = data;
         n = data_n;
         fitWork(ROOT);
+        cout<<"ALL ELEMENTS: " <<endl;
+        for (int i = 0; i < n; i++) {
+            std::cout << "Element " << i << ": (";
+            for (int j = 0; j < d; j++) {
+                std::cout << (int)elements[i][j];
+                if (j != d-1) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << ")" << std::endl;
+        }
     }
 
     /**
@@ -44,49 +57,123 @@ public:
      * @post clusters are now stable ( or we gave up after MAX_FIT_STEPS)
      */
     virtual void fitWork(int rank) {
-        dist.resize(n);
-//        reseedClusters();
-        Clusters prior = clusters; // save old clusters with the centroids and the elements please
-        prior[0].centroid[0]++;  // just to make it different the first time
-        int generation = 0;
+        MPI_Bcast(&n, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
+        int n_procs = 0;
+        MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
 
-        while(generalDiff < MAX_FIT_STEPS && prior != clusters) {
-            V(cout << rank << "working on generation" << generation << endl;)
-            updateDistances();  //calc distances for my partition [0..m]
-            prior = clusters; // prepare check for convergence
-            updateClusters(); // calc k clusters from my partition only
-            mergeClusters(rank); // reduce all the processes' clusters
-            bcastCentroids(rank);  // everyone needs to know the reduced centroids calculated by ROOT
+        int *sendcounts = nullptr;
+        int *displs =  nullptr;
+        int partition_size = n / n_procs;
+        int last_partition_size = partition_size + n % n_procs;
+        int my_partition_size = rank == n_procs-1 ? last_partition_size:partition_size; //max_size
+        auto *buffer = new u_char[n*d];
+
+        cout<<"my size:  "<<my_partition_size<<endl;
+        if(rank == ROOT) {
+            sendcounts = new int[n_procs];
+            displs = new int[n_procs];
+
+            // Compute the send counts and displacements for each process
+            for (int i = 0; i < n_procs; i++) {
+                sendcounts[i] = (i == n_procs - 1) ? last_partition_size * d : partition_size * d;
+            }
+            displs[0] = 0;
+            for (int i = 1; i < n_procs; i++) {
+                displs[i] = displs[i-1] + sendcounts[i-1];
+            }
+
+            int buffer_i = 0;
+            for(int i=0 ; i<n ;i++) {
+                for(int j=0; j<d; j++) {
+                    buffer[buffer_i++] = elements[i][j];
+                }
+            }
         }
+
+        my_elements = new Element[last_partition_size];
+        MPI_Scatterv(buffer, sendcounts, displs, MPI_UNSIGNED_CHAR,
+                     my_elements, last_partition_size * d, MPI_UNSIGNED_CHAR,
+                     ROOT, MPI_COMM_WORLD);
+
+        std::cout << "Rank " << rank << " n: " << n << " my partition is " << my_partition_size << std::endl;
+        for (int i = 0; i < my_partition_size; i++) {
+            std::cout << "Element " << i << ": (";
+            for (int j = 0; j < d; j++) {
+                std::cout << (int)my_elements[i][j];
+                if (j != d-1) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << ")" << std::endl;
+        }
+
+//        MPI_Bcast(&n, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
+//        int n_procs = 0;
+//        MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
+//        partition = rank == n_procs-1? n-(n/n_procs*(n_procs-1))   : n/n_procs;
+//        cout<<"Rank "<< rank<< " n: " << n << "my partition is " << partition <<endl;
+//
+//        my_elements = new Element[partition];
+//        MPI_Scatter(elements, partition * d, MPI_UNSIGNED_CHAR, my_elements, partition * d, MPI_UNSIGNED_CHAR, ROOT, MPI_COMM_WORLD);
+//
+//        cout<<"Rank "<<rank<<endl;
+//        for (int i = 0; i < partition; i++) {
+//            std::cout << "Element " << i << ": (";
+//            for (int j = 0; j < d; j++) {
+//                std::cout << (int)my_elements[i][j];
+//                if (j != d-1) {
+//                    std::cout << ", ";
+//                }
+//            }
+//            std::cout << ")" << std::endl;
+//        }
+
+//        dist.resize(partition); //TODO
+
+//        if(rank == ROOT) reseedClusters;
+
+//        Clusters prior = clusters; // save old clusters with the centroids and the elements please
+//        prior[0].centroid[0]++;  // just to make it different the first time
+//        int generation = 0;
+//
+//        while(generalDiff < MAX_FIT_STEPS && prior != clusters) {
+//            V(cout << rank << "working on generation" << generation << endl;)
+//            updateDistances();  //calc distances for my partition [0..m]
+//            prior = clusters; // prepare check for convergence
+//            updateClusters(); // calc k clusters from my partition only
+//            mergeClusters(rank); // reduce all the processes' clusters
+//            bcastCentroids(rank);  // everyone needs to know the reduced centroids calculated by ROOT
+//        }
+        delete[] my_elements;
+        delete[] sendcounts;
+        delete[] displs;
     }
 
     virtual void bcastCentroids(int rank) {
-        V(cout<<" "<<rank<<" bcastCentroids"<<endl;)
-        int count = k * d;
-        auto *buffer = new uchar[count];
-        if(rank == ROOT) {
-            int i = 0;
-            for(int j = 0; j<k; j++) {
-                for(int jd = 0; jd<d; jd++) {
-                    buffer[i++] = clusters[j].centroid[jd];
-                }
-            }
-//            V(cout<<" "<<rank<<" sending centroids: "clusters)
-        }
+        //     V(cout<<" "<<rank<<" bcastCentroids"<<endl;)
+        //     int count = k * d;
+        //     auto *buffer = new uchar[count];
+        //     if(rank == ROOT) {
+        //         int i = 0;
+        //         for(int j = 0; j<k; j++) {
+        //             for(int jd = 0; jd<d; jd++) {
+        //                 buffer[i++] = clusters[j].centroid;
+        //             }
+        //         }
+        //         V(cout<<" "<<rank<<" sending centroids: "clusters)
+        //     }
 
-        MPI_Bcast(buffer, count, MPI_UNSIGNED_CHAR, ROOT, MPI_COMM_WORLD); //blocking so first all the
-        if (rank!= ROOT) {
-            // todo
-            // code that receives the reduced centroids
-            // from the root process and updates its own clusters vector.
-            int i = 0;
-            for (int j = 0; j < k; j++) {
-                for (int jd = 0; jd < d; jd++) {
-                    clusters[j].centroid[jd] = buffer[i++];
-                }
-            }
-        }
-        delete[] buffer;
+        //     MPI_Bcast(buffer, count, MPI_UNSIGNED_CHAR, ROOT, MPI_COMM_WORLD);
+
+        //     if (rank!= ROOT) {
+        //         int i = 0;
+        //         for (int j = 0; j < k; j++) {
+        //             for (int jd = 0; jd < d; jd++) {
+        //                 clusters[j].centroid[jd] = buffer[i++];
+        //             }
+        //         }
+        //     }
+        //     delete[] buffer;
     }
 
     /**
@@ -106,9 +193,13 @@ public:
 
 protected:
     const Element *elements = nullptr;       // set of elements to classify into k categories (supplied to latest call to fit())
+    Element *my_elements = nullptr;    // set of elements each process is responsible for
     int n = 0;                               // number of elements in this->elements
     Clusters clusters;                       // k clusters resulting from latest call to fit()
     std::vector<std::array<double,k>> dist;  // dist[i][j] is the distance from elements[i] to clusters[j].centroid
+    int my_partition_size = 0; // size of partition
+    const int ROOT = 0;
+
     /**
      * Get the initial cluster centroids.
      * Default implementation here is to just pick k elements at random from the element
@@ -116,16 +207,16 @@ protected:
      * @return list of clusters made by using k random elements as the initial centroids
      */
     virtual void reseedClusters() {
-        std::vector<int> seeds;
-        std::vector<int> candidates(n);
-        std::iota(candidates.begin(), candidates.end(), 0);
-        auto random = std::mt19937{std::random_device{}()};
-        // Note that we need C++20 for std::sample
-        std::sample(candidates.begin(), candidates.end(), back_inserter(seeds), k, random);
-        for (int i = 0; i < k; i++) {
-            clusters[i].centroid = elements[seeds[i]];
-            clusters[i].elements.clear();
-        }
+        // std::vector<int> seeds;
+        // std::vector<int> candidates(partition);
+        // std::iota(candidates.begin(), candidates.end(), 0);
+        // auto random = std::mt19937{std::random_device{}()};
+        // // Note that we need C++20 for std::sample
+        // std::sample(candidates.begin(), candidates.end(), back_inserter(seeds), k, random);
+        // for (int i = 0; i < k; i++) {
+        //     clusters[i].centroid = elements[seeds[i]];
+        //     clusters[i].elements.clear();
+        // }
     }
 
     /**
@@ -133,16 +224,14 @@ protected:
      * Place into this->dist which is a k-vector of distances from each element to the kth centroid.
      */
     virtual void updateDistances() {
-        //m is the number of elements in the current partirion
-        for (int i = 0; i < m; i++) {
+        for (int i = 0; i < n; i++) {
             V(cout<<"distances for "<<i<<"(";for(int x=0;x<d;x++)printf("%02x",elements[i][x]);)
             for (int j = 0; j < k; j++) {
-                dist[i][j] = distance(elements[i], clusters[j].centroid);
+                dist[i][j] = distance(clusters[j].centroid, elements[i]);
                 V(cout<<" " << dist[i][j];)
-
             }
+            V(cout<<endl;)
         }
-
     }
 
     /**
@@ -158,7 +247,7 @@ protected:
         for (int i = 0; i < n; i++) {
             int min = 0;
             for (int j = 1; j < k; j++)
-                if (dist[i][j] < dist[i][min])  // here I am checking the minimum distance between each elemnt and each centroid
+                if (dist[i][j] < dist[i][min])  // here I am checking the minimum distance between each element and each centroid
                     min = j;
             accum(clusters[min].centroid, clusters[min].elements.size(), elements[i], 1);
             clusters[min].elements.push_back(i);
@@ -177,11 +266,6 @@ protected:
     virtual void accum(Element& centroid, int centroid_n, const Element& addend, int addend_n) const {
         int new_n = centroid_n + addend_n;
         for (int i = 0; i < d; i++) {
-            centroid[r] * elelements kolaha + element elgdid[r] * added
-            // ana 3yza azawed value el r wel g wel b bt3t elelement elgdid 3la eltotal bt3 elcentroid
-            // falaw elcentroid bta3y {3,4,5}
-            // wana gali element gdid {7,8,9}
-
             double new_total = (double) centroid[i] * centroid_n + (double) addend[i] * addend_n;
             centroid[i] = (u_char)(new_total / new_n);
         }
@@ -196,4 +280,3 @@ protected:
     virtual double distance(const Element& a, const Element& b) const = 0;
 
 };
-
