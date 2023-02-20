@@ -40,7 +40,7 @@ public:
         n = data_n;
         dist.resize(n);
         reseedClusters();
-        Clusters prior = clusters; // save old clusters with the centroids and the elements please
+        Clusters prior = clusters;
         prior[0].centroid[0]++;  // just to make it different the first time
         int generation = 0;
         while (generation++ < MAX_FIT_STEPS && prior != clusters) {
@@ -70,6 +70,7 @@ protected:
     int n = 0;                               // number of elements in this->elements
     Clusters clusters;                       // k clusters resulting from latest call to fit()
     std::vector<std::array<double,k>> dist;  // dist[i][j] is the distance from elements[i] to clusters[j].centroid
+
     /**
      * Get the initial cluster centroids.
      * Default implementation here is to just pick k elements at random from the element
@@ -117,7 +118,7 @@ protected:
         for (int i = 0; i < n; i++) {
             int min = 0;
             for (int j = 1; j < k; j++)
-                if (dist[i][j] < dist[i][min])  // here I am checking the minimum distance between each elemnt and each centroid
+                if (dist[i][j] < dist[i][min])
                     min = j;
             accum(clusters[min].centroid, clusters[min].elements.size(), elements[i], 1);
             clusters[min].elements.push_back(i);
@@ -131,8 +132,6 @@ protected:
      * @param addend     another element(s) to be added; if multiple, addend is their mean
      * @param addend_n   number of addends represented in the addend argument
      */
-     //     accum(clusters[min].centroid, clusters[min].elements.size(), elements[i], 1);
-     //     clusters[min].elements.push_back(i);
     virtual void accum(Element& centroid, int centroid_n, const Element& addend, int addend_n) const {
         int new_n = centroid_n + addend_n;
         for (int i = 0; i < d; i++) {
