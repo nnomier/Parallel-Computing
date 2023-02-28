@@ -1,3 +1,8 @@
+/**
+ * @file KMeansMPI.h - implementation of k-means clustering algorithm using MPI
+ * @author Noha Nomier
+ * @see "Seattle University, CPSC5600, Winter 2023"
+ */
 #pragma once  // only process the first time it is included; ignore otherwise
 #include <vector>
 #include <random>
@@ -37,18 +42,8 @@ public:
         elements = data;
         n = data_n;
         fitWork(ROOT);
-        cout<<"ALL ELEMENTS: " <<endl;
-        for (int i = 0; i < n; i++) {
-            std::cout << "Element " << i << ": (";
-            for (int j = 0; j < d; j++) {
-                std::cout << (int)elements[i][j];
-                if (j != d-1) {
-                    std::cout << ", ";
-                }
-            }
-            std::cout << ")" << std::endl;
-        }
     }
+
 
     /**
      * This is a per-process work for the fitting
@@ -60,109 +55,27 @@ public:
         MPI_Bcast(&n, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
         MPI_Comm_size(MPI_COMM_WORLD, &n_procs);
 
-        int *sendcounts = nullptr;
-        int *displs =  nullptr;
-        partition_size = n / n_procs;
-        int last_partition_size = partition_size + n % n_procs;
-        my_partition_size = rank == n_procs-1 ? last_partition_size:partition_size; //max_size
-        auto *buffer = new u_char[n*d];
-
-        cout<<"my size:  "<<my_partition_size<<endl;
-        if(rank == ROOT) {
-            sendcounts = new int[n_procs];
-            displs = new int[n_procs];
-
-            // Compute the send counts and displacements for each process
-            for (int i = 0; i < n_procs; i++) {
-                sendcounts[i] = (i == n_procs - 1) ? last_partition_size * d : partition_size * d;
-            }
-            displs[0] = 0;
-            for (int i = 1; i < n_procs; i++) {
-                displs[i] = displs[i-1] + sendcounts[i-1];
-            }
-
-            int buffer_i = 0;
-            for(int i=0 ; i<n ;i++) {
-                for(int j=0; j<d; j++) {
-                    buffer[buffer_i++] = elements[i][j];
-                }
-            }
-        }
-
-        my_elements = new Element[last_partition_size];
-        MPI_Scatterv(buffer, sendcounts, displs, MPI_UNSIGNED_CHAR,
-                     my_elements, last_partition_size * d, MPI_UNSIGNED_CHAR,
-                     ROOT, MPI_COMM_WORLD);
-
+        scatterElementsAndCreatePartition(rank);
         dist.resize(my_partition_size);
 
         if(rank == ROOT) {
             reseedClusters();
-            // for (int j = 0; j < k; j++) {
-            //     std::cout << "Cluster " << j << ": (";
-            //     for (int jd = 0; jd < d; jd++) {
-            //         std::cout << (int)clusters[j].centroid[jd];
-            //         if (jd != d - 1) {
-            //             std::cout << ", ";
-            //         }
-            //     }
-            //     std::cout << ")" << std::endl;
-            // }
         }
         bcastCentroids(rank); // send the initial values of centroids to everyone
-        // for (int j = 0; j < k; j++) {
-        //     std::cout << "Cluster " << j << ": (";
-        //     for (int jd = 0; jd < d; jd++) {
-        //         std::cout << (int)clusters[j].centroid[jd];
-        //         if (jd != d-1) {
-        //             std::cout << ", ";
-        //         }
-        //     }
-        //     std::cout << ")" << std::endl;
-        // }
+
         Clusters prior = clusters; // save old clusters with the centroids and the elements please
         prior[0].centroid[0]++;  // just to make it different the first time
         int generation = 0;
 
         while(generation++ < MAX_FIT_STEPS && prior != clusters) {
             V(cout << rank << "working on generation" << generation << endl;)
-            cout << rank << "working on generation" << generation << endl;
-            updateDistances();  //calc distances for my partition [0..m]
+            updateDistances();  // calc distances for my partition [0..m]
             prior = clusters; // prepare check for convergence
             updateClusters(); // calc k clusters from my partition only
             mergeClusters(rank); // reduce all the processes' clusters
             bcastCentroids(rank);  // everyone needs to know the reduced centroids calculated by ROOT
         }
         delete[] my_elements;
-        delete[] sendcounts;
-        delete[] displs;
-    }
-
-    virtual void bcastCentroids(int rank) {
-        //  V(cout<<" "<<rank<<" bcastCentroids"<<endl;)
-        int count = k * d;
-        auto *buffer = new u_char[count];
-        if(rank == ROOT) {
-            int i = 0;
-            for(int j = 0; j<k; j++) {
-                for(int jd = 0; jd<d; jd++) {
-                    buffer[i++] = clusters[j].centroid[jd];
-                }
-            }
-            //  V(cout<<" "<<rank<<" sending centroids: "<<clusters;)
-        }
-
-        MPI_Bcast(buffer, count, MPI_UNSIGNED_CHAR, ROOT, MPI_COMM_WORLD);
-
-        if (rank!= ROOT) {
-            int i = 0;
-            for (int j = 0; j < k; j++) {
-                for (int jd = 0; jd < d; jd++) {
-                    clusters[j].centroid[jd] = buffer[i++];
-                }
-            }
-        }
-        delete[] buffer;
     }
 
     /**
@@ -186,7 +99,7 @@ protected:
     int n = 0;                               // number of elements in this->elements
     Clusters clusters;                       // k clusters resulting from latest call to fit()
     std::vector<std::array<double,k>> dist;  // dist[i][j] is the distance from elements[i] to clusters[j].centroid
-    int my_partition_size = 0; // size of partition
+    int my_partition_size = 0; // size of partition my process is responsible for
     int n_procs = 0;
     int partition_size = 0;
     const int ROOT = 0;
@@ -240,32 +153,144 @@ protected:
             for (int j = 1; j < k; j++)
                 if (dist[i][j] < dist[i][min])  // here I am checking the minimum distance between each element and each centroid
                     min = j;
-            accum(clusters[min].centroid, clusters[min].elements.size(), my_elements[i], 1);
             clusters[min].elements.push_back(i);
         }
     }
 
-    void mergeClusters(int rank) {
-        // construct my buffer
-        int my_buffer_size = k+my_partition_size;
-        auto *mybuffer = new int[my_buffer_size];
-        int iterator = 0;
-        cout<<"RANK "<<rank<<" buffer size"<<my_buffer_size <<endl;
-        for (int i = 0; i < k ;i++) {
-            int centroid_elements = clusters[i].elements.size();
-            cout<<"rank "<<rank<<" elements size"<<centroid_elements<<endl;
-            mybuffer[iterator++] = centroid_elements;
 
-            for(int j=0; j<centroid_elements; j++) {
-                cout<<rank<<" elindex " << clusters[i].elements[j] + (partition_size * rank)<<endl;
-                mybuffer[iterator++] = clusters[i].elements[j] + (partition_size * rank); //multiply by rank to find the real index in elements
+    /**
+     * This function broadcasts the values of the centroids to all processes
+     * @param rank to identify role
+     */
+    virtual void bcastCentroids(int rank) {
+        int count = k * d;
+        auto *buffer = new u_char[count];
+        if(rank == ROOT) {
+            int i = 0;
+            for(int j = 0; j<k; j++) {
+                for(int jd = 0; jd<d; jd++) {
+                    buffer[i++] = clusters[j].centroid[jd];
+                }
             }
         }
 
-        for(int i=0;i<my_buffer_size;i++){
-            cout<<mybuffer[i]<<" ";
+        MPI_Bcast(buffer, count, MPI_UNSIGNED_CHAR, ROOT, MPI_COMM_WORLD);
+
+        if (rank!= ROOT) {
+            int i = 0;
+            for (int j = 0; j < k; j++) {
+                for (int jd = 0; jd < d; jd++) {
+                    clusters[j].centroid[jd] = buffer[i++];
+                }
+            }
         }
-        cout<<endl;
+        delete[] buffer;
+    }
+
+    /**
+     * Divides the input data into small sized partitions and scatter them to all processes
+     * each process has its own partition size and it's own subset of the data that  it will work on
+     * @param rank
+     */
+    virtual void scatterElementsAndCreatePartition(int rank) {
+        int *sendcounts = nullptr;
+        int *displs =  nullptr;
+        partition_size = n / n_procs;
+        int last_partition_size = partition_size + n % n_procs;
+        my_partition_size = rank == n_procs-1 ? last_partition_size:partition_size; //max_size
+        auto *buffer = new u_char[n*d];
+
+        if(rank == ROOT) {
+            sendcounts = new int[n_procs];
+            displs = new int[n_procs];
+
+            // Compute the send counts and displacements for each process
+            for (int i = 0; i < n_procs; i++) {
+                sendcounts[i] = (i == n_procs - 1) ? last_partition_size * d : partition_size * d;
+            }
+
+            displs[0] = 0;
+            for (int i = 1; i < n_procs; i++) {
+                displs[i] = displs[i-1] + sendcounts[i-1];
+            }
+
+            int buffer_i = 0;
+            for(int i=0 ; i<n ;i++) {
+                for(int j=0; j<d; j++) {
+                    buffer[buffer_i++] = elements[i][j];
+                }
+            }
+        }
+
+        my_elements = new Element[last_partition_size];
+        MPI_Scatterv(buffer, sendcounts, displs, MPI_UNSIGNED_CHAR,
+                     my_elements, last_partition_size * d, MPI_UNSIGNED_CHAR,
+                     ROOT, MPI_COMM_WORLD);
+
+        delete[] sendcounts;
+        delete[] displs;
+    }
+
+    /**
+     * helper function to print the values of the centroids and
+     * the elements of each cluster
+     */
+    virtual void printCentroids () {
+        for (int j = 0; j < k; j++) {
+            cout << "Cluster " << j << ": (";
+            for (int jd = 0; jd < d; jd++) {
+                cout << (int)clusters[j].centroid[jd];
+                if (jd != d-1) {
+                    cout << ", ";
+                }
+            }
+            cout << ")" << std::endl;
+        }
+    }
+
+    /**
+     * Merges all the centroid's elements at the root to re-calculate the global centroids
+     * based on elements from other processes
+     * @param rank
+     */
+    void mergeClusters(int rank) {
+        // construct my buffer
+        int my_buffer_size = k+my_partition_size;
+        auto *mybuffer = constructMyCentroidsBuffer(my_buffer_size, rank);
+
+        auto *clusters_buffer = gatherClustersAtRoot(mybuffer, my_buffer_size, rank);
+
+        int iterator = 0;
+        if(rank == ROOT) {
+            for (auto& cluster : clusters) {
+                cluster.elements.clear();
+            }
+            for (int p = 0; p < n_procs; p++) {
+                for (int c = 0; c < k; c++) {
+                    int num_elements = clusters_buffer[iterator++];
+                    for (int j = 0; j < num_elements; j++) {
+                        int element_index = clusters_buffer[iterator++];
+                        accum(clusters[c].centroid, clusters[c].elements.size(), elements[element_index], 1);
+                        clusters[c].elements.push_back(element_index);
+                    }
+                }
+            }
+        }
+
+        delete[] mybuffer;
+        delete[] clusters_buffer;
+    }
+
+    /**
+     * Sends all elements stored at local clusters to be gathered at the root to calculate global centroids
+     * using MPI_Gatherbv
+     * @param mybuffer buffer for each process that contains <size_of_elements_at_cluster_i> followed
+     * by elements at cluster i for that process
+     * @param my_buffer_size size of each process buffer to be gathered at root
+     * @param rank
+     * @return
+     */
+    virtual int* gatherClustersAtRoot(int* mybuffer, int my_buffer_size, int rank) {
         int *recvcounts = nullptr;
         int *displs = nullptr;
         int total_size = 0;
@@ -276,7 +301,6 @@ protected:
             // Gather all the elements into the root process
             recvcounts = new int[n_procs];
             displs = new int[n_procs];
-            // int buffer_size = k * 2 * partition_size;
             for (int i = 0; i < n_procs; i++) {
                 recvcounts[i] = partition_size + k;
                 displs[i] = i * recvcounts[i];
@@ -288,36 +312,27 @@ protected:
                     buffer, recvcounts, displs, MPI_INT,
                     ROOT, MPI_COMM_WORLD);
 
-        iterator = 0;
-        if(rank == ROOT) {
-            for (auto& cluster : clusters) {
-                cluster.elements.clear();
-            }
-            for (int p = 0; p < n_procs; p++) {
-                for (int c = 0; c < k; c++) {
-                    int num_elements = buffer[iterator++];
+        delete []recvcounts;
+        delete []displs;
 
-                    for (int j = 0; j < num_elements; j++) {
-                        int element_index = buffer[iterator++];
-                        accum(clusters[c].centroid, clusters[c].elements.size(), elements[element_index], 1);
-                        clusters[c].elements.push_back(element_index);
-                    }
-                }
+        return buffer;
+    }
+
+    virtual int* constructMyCentroidsBuffer(int my_buffer_size, int rank) {
+        int* mybuffer = new int[my_buffer_size];
+        int iterator = 0;
+
+        for (int i = 0; i < k; i++) {
+            int centroid_elements = clusters[i].elements.size();
+            mybuffer[iterator++] = centroid_elements;
+
+            for (int j = 0; j < centroid_elements; j++) {
+                mybuffer[iterator++] = clusters[i].elements[j] + (partition_size * rank);
             }
         }
 
-
-        // Recalculate the centroid for the merged elements
-//                for (int j = 0; j < d; j++) {
-//                    double sum = 0;
-//                    for (int elem : clusters[i].elements) {
-//                        sum += (double)elements[elem][j];
-//                    }
-//                    clusters[i].centroid[j] = (u_char)(sum / clusters[i].elements.size());
-//                }
-
+        return mybuffer;
     }
-
 
     /**
      * Method to update a centroid with an additional element(s)
@@ -326,8 +341,6 @@ protected:
      * @param addend     another element(s) to be added; if multiple, addend is their mean
      * @param addend_n   number of addends represented in the addend argument
      */
-    //     accum(clusters[min].centroid, clusters[min].elements.size(), elements[i], 1);
-    //     clusters[min].elements.push_back(i);
     virtual void accum(Element& centroid, int centroid_n, const Element& addend, int addend_n) const {
         int new_n = centroid_n + addend_n;
         for (int i = 0; i < d; i++) {

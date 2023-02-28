@@ -1,5 +1,5 @@
 CPPFLAGS = -std=c++20 -Wall -Werror -pedantic -ggdb
-PROGRAMS = kmean_color_test hw5
+PROGRAMS = kmean_color_test hw5 mnistMPI
 
 all : $(PROGRAMS)
 
@@ -21,8 +21,18 @@ hw5.o : hw5.cpp Color.h ColorKMeansMPI.h KMeansMPI.h
 hw5 : hw5.o Color.o
 	mpic++ $(CPPFLAGS) hw5.o Color.o -o $@
 
+
+mnistMPI.o : mnistMPI.cpp MnistKMeansMPI.h KMeansMPI.h
+	mpic++ $(CPPFLAGS) $< -c -o $@
+
+mnistMPI : mnistMPI.o
+	mpic++ $(CPPFLAGS) mnistMPI.o -o $@
+
 run_hw5 : hw5
 	mpirun -n 2 ./hw5
+
+run_mnist : mnistMPI
+	mpirun -n 2 ./mnistMPI
 
 valgrind : hw5
 	mpirun -n 2 valgrind ./hw5
@@ -31,4 +41,4 @@ bigger_test : hw5
 	mpirun -n 10 ./hw5
 
 clean :
-	rm -f $(PROGRAMS) Color.o kmean_color_test.o hw5.o 
+	rm -f $(PROGRAMS) Color.o kmean_color_test.o hw5.o mnistMPI.o
