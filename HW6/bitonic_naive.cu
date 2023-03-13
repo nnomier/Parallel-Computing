@@ -14,7 +14,7 @@ using namespace std;
   *  here, but __device__ functions can return a value
   *  even though __global__'s cannot)
   */
-__device__ void swap(float *data, int a, int b) {
+__host__ __device__ void swap(float *data, int a, int b) {
     float temp = data[a];
     data[a] = data[b];
     data[b] = temp;
@@ -25,28 +25,28 @@ __device__ void swap(float *data, int a, int b) {
   * (this function assumes j <= MAX_BLOCK_SIZE--bigger than that and we'd need to
   *  synchronize across different blocks)
   */
-__global__ void bitonic(float *data, int k) {
-    int i = blockDim.x * blockIdx.x + threadIdx.x;
-    for (int j = k/2; j > 0; j /= 2) {
-        int ixj = i ^ j;
-        // avoid data race by only having the lesser of ixj and i actually do the comparison
-        if (ixj > i) {
-            if ((i & k) == 0 && data[i] > data[ixj])
-                swap(data, i, ixj);
-            if ((i & k) != 0 && data[i] < data[ixj])
-                swap(data, i, ixj);
-        }
-        // wait for all the threads to finish before the next comparison/swap
-        __syncthreads();
+__global__ void bitonic(float *data, int k, int j, int block) {
+    int i = blockDim.x * block + threadIdx.x;
+    int ixj = i ^ j;
+    // avoid data race by only having the lesser of ixj and i actually do the comparison
+    if (ixj > i) {
+        if ((i & k) == 0 && data[i] > data[ixj])
+            swap(data, i, ixj);
+        if ((i & k) != 0 && data[i] < data[ixj])
+            swap(data, i, ixj);
     }
+    // wait for all the threads to finish before the next comparison/swap
+    __syncthreads();
 }
+
 
 int main() {
     const int MAX_BLOCK_SIZE = 1024; // true for all CUDA architectures so far
+    int threads = MAX_BLOCK_SIZE;
     int n;
     cout << "n = ? (must be power of 2): ";
     cin >> n;
-    if (n > MAX_BLOCK_SIZE || pow(2,floor(log2(n))) != n) {
+    if (pow(2,floor(log2(n))) != n) {
         cerr << "n must be power of 2 and <= " << MAX_BLOCK_SIZE << endl;
         return 1;
     }
@@ -54,7 +54,7 @@ int main() {
     // use managed memory for the data array
     float *data;
     cudaMallocManaged(&data, n * sizeof(*data));
-
+    int numBlocks = (n + threads - 1) / threads;
     // fill it with random values
     random_device r;
     default_random_engine gen(r());
@@ -62,20 +62,24 @@ int main() {
     for (int i = 0; i < n; i++)
         data[i] = rand(gen);
 
-    // sort it with naive bitonic sort
     for (int k = 2; k <= n; k *= 2) {
-        // coming back to the host between values of k acts as a barrier
-        // note that in later hardware (compute capabilty >= 7.0), there is a cuda::barrier avaliable
-        bitonic<<<1, MAX_BLOCK_SIZE>>>(data, k);
+        for (int j = k/2; j > 0; j /= 2) {
+            for(int b = 0; b<numBlocks; b++) {
+                bitonic<<<1, MAX_BLOCK_SIZE>>>(data, k, j, b);
+            }
+            cudaDeviceSynchronize();
+        }
     }
     cudaDeviceSynchronize();
 
     // print out results
-    for (int i = 0; i < n; i++)
+    for (int i = 1; i < n; i++){
         if (i < 3 || i >= n - 3 || i % 100 == 0)
             cout << data[i] << " ";
         else
             cout << ".";
+    }
     cout << endl;
+    cudaFree(data);
     return 0;
 }
