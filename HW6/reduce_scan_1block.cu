@@ -83,10 +83,6 @@ int main(void) {
     printArray(data, n, "Before");
     float* blockSums;
     cudaMallocManaged(&blockSums, numBlocks * sizeof(float));
-    // allreduce<<<1, threads>>>(data);
-    // cudaDeviceSynchronize();
-    // printArray(data, n, "Reduce");
-    // fillArray(data, n, threads);
 
     blockScan<<<numBlocks, threads>>>(data, blockSums);
     cudaDeviceSynchronize();
